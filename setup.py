@@ -22,7 +22,7 @@ from suds import properties
 
 setup(
     name="suds",
-    version=properties['version'],
+    version='0.3.5',
     description="Lightweight SOAP client",
     author="Jeff Ortel",
     author_email="jortel@redhat.com",
