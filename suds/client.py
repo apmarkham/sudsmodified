@@ -22,8 +22,7 @@ See I{README.txt}
 from logging import getLogger
 import suds.metrics as metrics
 from http.cookiejar import CookieJar
-from suds import (TypeNotFound, BuildError, ServiceNotFound, PortNotFound,
-                  MethodNotFound, WebFault)
+from suds import *
 from suds.transport import TransportError, Request
 from suds.transport.https import HttpAuthenticated
 from suds.transport.cache import FileCache
