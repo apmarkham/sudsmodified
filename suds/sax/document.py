@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -19,33 +19,43 @@ Provides XML I{document} classes.
 """
 
 from logging import getLogger
-from suds import *
-from suds.sax import *
 from suds.sax.element import Element
 
 log = getLogger(__name__)
 
+
 class Document(Element):
     """ simple document """
+
+    DECL = '<?xml version="1.0" encoding="UTF-8"?>'
 
     def __init__(self, root=None):
         Element.__init__(self, 'document')
         if root is not None:
             self.append(root)
-        
+
     def root(self):
-        if len(self.children) > 0:
+        if len(self.children):
             return self.children[0]
         else:
             return None
-        
+
+    def str(self):
+        s = []
+        s.append(self.DECL)
+        s.append('\n')
+        if self.root() is not None:
+            s.append(self.root().str())
+        return ''.join(s)
+
+    def plain(self):
+        s = []
+        s.append(self.DECL)
+        s.append(self.root().plain())
+        return ''.join(s)
+
     def __str__(self):
-        return unicode(self).encode('utf-8')
-    
+        return self.str()
+
     def __unicode__(self):
-        result = '<?xml version="1.0" encoding="UTF-8"?>'
-        root = self.root()
-        if root is not None:
-            result += '\n'
-            result += root.str()
-        return unicode(result)
+        return self.str()

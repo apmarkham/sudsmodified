@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -19,30 +19,33 @@ The I{2nd generation} service proxy provides access to web services.
 See I{README.txt}
 """
 
-from logging import getLogger
+import suds
 import suds.metrics as metrics
 from http.cookiejar import CookieJar
-from suds import *
+from suds import (TypeNotFound, BuildError, ServiceNotFound, PortNotFound,
+                  MethodNotFound, WebFault)
+from suds.reader import DefinitionsReader
 from suds.transport import TransportError, Request
-from suds.transport.https import HttpAuthenticated
-from suds.transport.cache import FileCache
+from suds.transport.http import HttpAuthenticated
 from suds.servicedefinition import ServiceDefinition
 from suds import sudsobject
-from sudsobject import Factory as InstFactory
-from sudsobject import Object
+from .sudsobject import Factory as InstFactory
 from suds.resolver import PathResolver
 from suds.builder import Builder
 from suds.wsdl import Definitions
-from suds.sax.document import Document
+from suds.cache import ObjectCache
 from suds.sax.parser import Parser
 from suds.options import Options
-from urlparse import urlparse
+from suds.properties import Unskin
+from copy import deepcopy
+from suds.plugin import PluginContainer
+from logging import getLogger
 
 log = getLogger(__name__)
 
 
 class Client(object):
-    """ 
+    """
     A lightweight web services client.
     I{(2nd generation)} API.
     @ivar wsdl: The WSDL object.
@@ -67,7 +70,7 @@ class Client(object):
         @rtype: [(key, value),...]
         """
         return sudsobject.items(sobject)
-    
+
     @classmethod
     def dict(cls, sobject):
         """
@@ -79,7 +82,7 @@ class Client(object):
         @rtype: dict
         """
         return sudsobject.asdict(sobject)
-    
+
     @classmethod
     def metadata(cls, sobject):
         """
@@ -99,24 +102,32 @@ class Client(object):
         @see: L{Options}
         """
         options = Options()
-        options.cache = FileCache(days=1)
-        options.transport = HttpAuthenticated(options)
-        options.set(**kwargs)
+        options.transport = HttpAuthenticated()
         self.options = options
-        self.wsdl = Definitions(url, options)
-        self.service = Wrapper(Service(self))
+        if 'cache' not in kwargs:
+            options.cache = ObjectCache(days=1)
+        self.set_options(**kwargs)
+        reader = DefinitionsReader(options, Definitions)
+        self.wsdl = reader.open(url)
+        plugins = PluginContainer(options.plugins)
+        plugins.init.initialized(wsdl=self.wsdl)
         self.factory = Factory(self.wsdl)
-        self.sd = ServiceDefinition(self.wsdl)
+        self.service = ServiceSelector(self, self.wsdl.services)
+        self.sd = []
+        for s in self.wsdl.services:
+            sd = ServiceDefinition(self.wsdl, s)
+            self.sd.append(sd)
         self.messages = dict(tx=None, rx=None)
-        
+
     def set_options(self, **kwargs):
         """
         Set options.
         @param kwargs: keyword arguments.
         @see: L{Options}
         """
-        self.options.set(**kwargs)
-        
+        p = Unskin(self.options)
+        p.update(kwargs)
+
     def add_prefix(self, prefix, uri):
         """
         Add I{static} mapping of an XML namespace prefix to a namespace.
@@ -135,7 +146,7 @@ class Client(object):
             return
         if mapped[1] != uri:
             raise Exception('"%s" already mapped as "%s"' % (prefix, mapped))
-        
+
     def last_sent(self):
         """
         Get last sent I{soap} message.
@@ -143,7 +154,7 @@ class Client(object):
         @rtype: L{Document}
         """
         return self.messages.get('tx')
-    
+
     def last_received(self):
         """
         Get last received I{soap} message.
@@ -151,18 +162,59 @@ class Client(object):
         @rtype: L{Document}
         """
         return self.messages.get('rx')
- 
+
+    def clone(self):
+        """
+        Get a shallow clone of this object.
+        The clone only shares the WSDL.  All other attributes are
+        unique to the cloned object including options.
+        @return: A shallow clone.
+        @rtype: L{Client}
+        """
+        class Uninitialized(Client):
+            def __init__(self):
+                pass
+        clone = Uninitialized()
+        clone.options = Options()
+        cp = Unskin(clone.options)
+        mp = Unskin(self.options)
+        cp.update(deepcopy(mp))
+        clone.wsdl = self.wsdl
+        clone.factory = self.factory
+        clone.service = ServiceSelector(clone, self.wsdl.services)
+        clone.sd = self.sd
+        clone.messages = dict(tx=None, rx=None)
+        return clone
+
     def __str__(self):
-        return unicode(self)
-        
+        s = ['\n']
+        build = suds.__build__.split()
+        s.append('Suds ( https://github.com/cackharot/suds-py3 )')
+        s.append('  version: %s' % suds.__version__)
+        s.append(' %s  build: %s' % (build[0], build[1]))
+        for sd in self.sd:
+            s.append('\n\n%s' % sd)
+        return ''.join(s)
+
     def __unicode__(self):
         s = ['\n']
-        version = properties.get('version')
-        build = properties.get('build').split()
-        s.append('Suds ( https://fedorahosted.org/suds/ )')
-        s.append('  version: %s' % version)
+        build = suds.__build__.split()
+        s.append('Suds ( https://github.com/cackharot/suds-py3 )')
+        s.append('  version: %s' % suds.__version__)
         s.append(' %s  build: %s' % (build[0], build[1]))
-        s.append('\n\n%s' % unicode(self.sd))
+        for sd in self.sd:
+            s.append('\n\n%s' % sd)
+        return ''.join(s)
+
+    def html(self):
+        s = ['']
+        build = suds.__build__.split()
+        s.append('<h1>Suds <small>(')
+        s.append('  version: %s' % suds.__version__)
+        s.append(' %s  build: %s' % (build[0], build[1]))
+        s.append(')</small></h1>')
+        for sd in self.sd:
+            s.append('<hr/>%s' % sd.html())
         return ''.join(s)
 
 
@@ -174,7 +226,7 @@ class Factory:
     @ivar builder: A schema object builder.
     @type builder: L{Builder}
     """
-    
+
     def __init__(self, wsdl):
         """
         @param wsdl: A schema object.
@@ -183,7 +235,7 @@ class Factory:
         self.wsdl = wsdl
         self.resolver = PathResolver(wsdl)
         self.builder = Builder(self.resolver)
-    
+
     def create(self, name):
         """
         create a WSDL type by name
@@ -210,7 +262,7 @@ class Factory:
         timer.stop()
         metrics.log.debug('%s created: %s', name, timer)
         return result
-    
+
     def separator(self, ps):
         """
         Set the path separator.
@@ -219,164 +271,258 @@ class Factory:
         """
         self.resolver = PathResolver(self.wsdl, ps)
 
-   
-class Wrapper:
+
+class ServiceSelector:
     """
-    Wrapper, translates to resolve() and call().
+    The B{service} selector is used to select a web service.
+    In most cases, the wsdl only defines (1) service in which access
+    by subscript is passed through to a L{PortSelector}.  This is also the
+    behavior when a I{default} service has been specified.  In cases
+    where multiple services have been defined and no default has been
+    specified, the service is found by name (or index) and a L{PortSelector}
+    for the service is returned.  In all cases, attribute access is
+    forwarded to the L{PortSelector} for either the I{first} service or the
+    I{default} service (when specified).
+    @ivar __client: A suds client.
+    @type __client: L{Client}
+    @ivar __services: A list of I{wsdl} services.
+    @type __services: list
     """
-    
-    def __init__(self, wrapped):
-        self.__wrapped__ = wrapped
+    def __init__(self, client, services):
+        """
+        @param client: A suds client.
+        @type client: L{Client}
+        @param services: A list of I{wsdl} services.
+        @type services: list
+        """
+        self.__client = client
+        self.__services = services
 
     def __getattr__(self, name):
-        builtin =  name.startswith('__') and name.endswith('__')
-        if builtin:
-            return self.__dict__[name]
-        else:
-            return self.__wrapped__.resolve(name)
-        
-    def __call__(self, *args, **kwargs):
-        target = self.__wrapped__
-        return target.call(*args, **kwargs)
-    
-    def __str__(self):
-        return str(self.__wrapped__)
-    
-    def __unicode__(self):
-        return unicode(self.__wrapped__) 
-        
-
-class Service:
-    """
-    The I{service} (namespace) object.
-    @ivar client: A client object.
-    @type client: L{Client}
-    """
-    
-    def __init__(self, client):
         """
-        @param client: A client object.
-        @type client: L{Client}
-        """
-        self.client = client
-        
-    def resolve(self, name):
-        """
-        Resolve I{name} to a service port.
-        @param name: A port/method name.
+        Request to access an attribute is forwarded to the
+        L{PortSelector} for either the I{first} service or the
+        I{default} service (when specified).
+        @param name: The name of a method.
         @type name: str
-        @return: The I{wrapped} L{Port}
+        @return: A L{PortSelector}.
+        @rtype: L{PortSelector}.
         """
-        service = self.client.wsdl.service
-        port = self.dport(service)
+        default = self.__ds()
+        if default is None:
+            port = self.__find(0)
+        else:
+            port = default
+        return getattr(port, name)
+
+    def __getitem__(self, name):
+        """
+        Provides selection of the I{service} by name (string) or
+        index (integer).  In cases where only (1) service is defined
+        or a I{default} has been specified, the request is forwarded
+        to the L{PortSelector}.
+        @param name: The name (or index) of a service.
+        @type name: (int|str)
+        @return: A L{PortSelector} for the specified service.
+        @rtype: L{PortSelector}.
+        """
+        if len(self.__services) == 1:
+            port = self.__find(0)
+            return port[name]
+        default = self.__ds()
+        if default is not None:
+            port = default
+            return port[name]
+        return self.__find(name)
+
+    def __find(self, name):
+        """
+        Find a I{service} by name (string) or index (integer).
+        @param name: The name (or index) of a service.
+        @type name: (int|str)
+        @return: A L{PortSelector} for the found service.
+        @rtype: L{PortSelector}.
+        """
+        service = None
+        if not len(self.__services):
+            raise Exception('No services defined')
+        if isinstance(name, int):
+            try:
+                service = self.__services[name]
+                name = service.name
+            except IndexError:
+                raise ServiceNotFound('at [%d]' % name)
+        else:
+            for s in self.__services:
+                if name == s.name:
+                    service = s
+                    break
+        if service is None:
+            raise ServiceNotFound(name)
+        return PortSelector(self.__client, service.ports, name)
+
+    def __ds(self):
+        """
+        Get the I{default} service if defined in the I{options}.
+        @return: A L{PortSelector} for the I{default} service.
+        @rtype: L{PortSelector}.
+        """
+        ds = self.__client.options.service
+        if ds is None:
+            return None
+        else:
+            return self.__find(ds)
+
+
+class PortSelector:
+    """
+    The B{port} selector is used to select a I{web service} B{port}.
+    In cases where multiple ports have been defined and no default has been
+    specified, the port is found by name (or index) and a L{MethodSelector}
+    for the port is returned.  In all cases, attribute access is
+    forwarded to the L{MethodSelector} for either the I{first} port or the
+    I{default} port (when specified).
+    @ivar __client: A suds client.
+    @type __client: L{Client}
+    @ivar __ports: A list of I{service} ports.
+    @type __ports: list
+    @ivar __qn: The I{qualified} name of the port (used for logging).
+    @type __qn: str
+    """
+    def __init__(self, client, ports, qn):
+        """
+        @param client: A suds client.
+        @type client: L{Client}
+        @param ports: A list of I{service} ports.
+        @type ports: list
+        @param qn: The name of the service.
+        @type qn: str
+        """
+        self.__client = client
+        self.__ports = ports
+        self.__qn = qn
+
+    def __getattr__(self, name):
+        """
+        Request to access an attribute is forwarded to the
+        L{MethodSelector} for either the I{first} port or the
+        I{default} port (when specified).
+        @param name: The name of a method.
+        @type name: str
+        @return: A L{MethodSelector}.
+        @rtype: L{MethodSelector}.
+        """
+        default = self.__dp()
+        if default is None:
+            m = self.__find(0)
+        else:
+            m = default
+        return getattr(m, name)
+
+    def __getitem__(self, name):
+        """
+        Provides selection of the I{port} by name (string) or
+        index (integer).  In cases where only (1) port is defined
+        or a I{default} has been specified, the request is forwarded
+        to the L{MethodSelector}.
+        @param name: The name (or index) of a port.
+        @type name: (int|str)
+        @return: A L{MethodSelector} for the specified port.
+        @rtype: L{MethodSelector}.
+        """
+        default = self.__dp()
+        if default is None:
+            return self.__find(name)
+        else:
+            return default
+
+    def __find(self, name):
+        """
+        Find a I{port} by name (string) or index (integer).
+        @param name: The name (or index) of a port.
+        @type name: (int|str)
+        @return: A L{MethodSelector} for the found port.
+        @rtype: L{MethodSelector}.
+        """
+        port = None
+        if not len(self.__ports):
+            raise Exception('No ports defined: %s' % self.__qn)
+        if isinstance(name, int):
+            qn = '%s[%d]' % (self.__qn, name)
+            try:
+                port = self.__ports[name]
+            except IndexError:
+                raise PortNotFound(qn)
+        else:
+            qn = '.'.join((self.__qn, name))
+            for p in self.__ports:
+                if name == p.name:
+                    port = p
+                    break
         if port is None:
-            port = service.port(name)
-        return Wrapper(Port(self.client, (name, port)))
-    
-    def dport(self, service):
-        """
-        The I{default} port as defined by L{Options}.
-        @param service: A wsdl service object.
-        @type service : L{wsdl.Service}
-        @return: The I{raw} L{wsdl.Port}
-        """
-        name = self.client.options.port
-        if name is not None:
-            port = service.port(name)
-            if port is None:
-                raise PortNotFound(name)
-        else:
-            port = None
-        return port
-    
-    def __str__(self):
-        return unicode(self)
-    
-    def __unicode__(self):
-        return unicode(self.client.sd) 
+            raise PortNotFound(qn)
+        qn = '.'.join((self.__qn, port.name))
+        return MethodSelector(self.__client, port.methods, qn)
 
-        
-class Port:
-    """
-    The I{port} (namespace) object.
-    @ivar client: A client object.
-    @type client: L{Client}
-    @ivar port: A port tuple (name, L{wsdl.Port})
-    @type port: tuple
-    """
-    
-    def __init__(self, client, port):
+    def __dp(self):
         """
-        @param client: A client object.
+        Get the I{default} port if defined in the I{options}.
+        @return: A L{MethodSelector} for the I{default} port.
+        @rtype: L{MethodSelector}.
+        """
+        dp = self.__client.options.port
+        if dp is None:
+            return None
+        else:
+            return self.__find(dp)
+
+
+class MethodSelector:
+    """
+    The B{method} selector is used to select a B{method} by name.
+    @ivar __client: A suds client.
+    @type __client: L{Client}
+    @ivar __methods: A dictionary of methods.
+    @type __methods: dict
+    @ivar __qn: The I{qualified} name of the method (used for logging).
+    @type __qn: str
+    """
+    def __init__(self, client, methods, qn):
+        """
+        @param client: A suds client.
         @type client: L{Client}
-        @param port: A port tuple (name, L{wsdl.Port})
-        @type port: tuple
+        @param methods: A dictionary of methods.
+        @type methods: dict
+        @param qn: The I{qualified} name of the port.
+        @type qn: str
         """
-        self.client = client
-        self.port = port
-        
-    def resolve(self, name, strict=True):
-        """
-        Resolve I{name} to a service method.
-        @param name: A method name.
-        @type name: str
-        @param strict: Make sure this is a real port.
-        @type strict: bool
-        @return: The I{wrapped} L{Method}
-        """
-        if strict and self.anyport():
-            raise PortNotFound(self.name())
-        finder = self.finder()
-        method = finder.method(name)
-        if method is None:
-            raise MethodNotFound(name)
-        return Wrapper(Method(self.client, method))
-    
-    def name(self):
-        """
-        The port name.
-        @return: The port name.
-        @rtype: str
-        """
-        return self.port[0]
-    
-    def realport(self):
-        """
-        The I{real} port.
-        @return: The contained port object.
-        @rtype: L{wsdl.Port}
-        """
-        return self.port[1]
-    
-    def anyport(self):
-        """
-        Get whether this port references a real port or just a
-        placeholder for I{any} port.
-        @return: True if real port reference is None.
-        @rtype: bool
-        """
-        return ( self.realport() is None )
-    
-    def finder(self):
-        """
-        The method name I{finder}.
-        @return: A method name resolver.
-        @rtype: (L{wsdl.Port}|L{wsdl.Service})
-        """
-        if self.anyport():
-            return self.client.wsdl.service
-        else:
-            return self.realport()
+        self.__client = client
+        self.__methods = methods
+        self.__qn = qn
 
-    def call(self, *args, **kwargs):
+    def __getattr__(self, name):
         """
-        When called, this means that this port was returned by the
-        Service.resolve() but the user intended to call a method.
-        The name is used to lookup a method and forwards the invocation
-        to the method.
+        Get a method by name and return it in an I{execution wrapper}.
+        @param name: The name of a method.
+        @type name: str
+        @return: An I{execution wrapper} for the specified method name.
+        @rtype: L{Method}
         """
-        method = self.resolve(self.name(), strict=False)
-        return method(*args, **kwargs)
+        return self[name]
+
+    def __getitem__(self, name):
+        """
+        Get a method by name and return it in an I{execution wrapper}.
+        @param name: The name of a method.
+        @type name: str
+        @return: An I{execution wrapper} for the specified method name.
+        @rtype: L{Method}
+        """
+        m = self.__methods.get(name)
+        if m is None:
+            qn = '.'.join((self.__qn, name))
+            raise MethodNotFound(qn)
+        return Method(self.__client, m)
 
 
 class Method:
@@ -397,19 +543,10 @@ class Method:
         """
         self.client = client
         self.method = method
-        
-    def resolve(self, name):
+
+    def __call__(self, *args, **kwargs):
         """
-        Error, not permitted.
-        @param name: A method attribute to be resolved.
-        @type name: str.
-        @raise AttributeError: Always.
-        """
-        raise AttributeError(name)
-    
-    def call(self, *args, **kwargs):
-        """
-        Method Invocation.
+        Invoke the method.
         """
         clientclass = self.clientclass(kwargs)
         client = clientclass(self.client, self.method)
@@ -420,11 +557,13 @@ class Method:
                 return (500, e)
         else:
             return client.invoke(args, kwargs)
-        
+
     def faults(self):
+        """ get faults option """
         return self.client.options.faults
-        
+
     def clientclass(self, kwargs):
+        """ get soap client class """
         if SimClient.simulation(kwargs):
             return SimClient
         else:
@@ -455,7 +594,7 @@ class SoapClient:
         self.method = method
         self.options = client.options
         self.cookiejar = CookieJar()
-        
+
     def invoke(self, args, kwargs):
         """
         Send the required soap message to invoke the specified method
@@ -470,25 +609,24 @@ class SoapClient:
         timer.start()
         result = None
         binding = self.method.binding.input
-        binding.options = self.options
-        msg = binding.get_message(self.method, args, kwargs)
+        soapenv = binding.get_message(self.method, args, kwargs)
         timer.stop()
-        metrics.log.debug(
-                "message for '%s' created: %s",
-                self.method.qname, timer)
+        metrics.log.debug("message for '%s' created: %s",
+                          self.method.name,
+                          timer)
         timer.start()
-        result = self.send(msg)
+        result = self.send(soapenv)
         timer.stop()
-        metrics.log.debug(
-                "method '%s' invoked: %s",
-                self.method.qname, timer)
+        metrics.log.debug("method '%s' invoked: %s",
+                          self.method.name,
+                          timer)
         return result
-    
-    def send(self, msg):
+
+    def send(self, soapenv):
         """
         Send soap message.
-        @param msg: A soap message to send.
-        @type msg: basestring
+        @param soapenv: A soap envelope to send.
+        @type soapenv: L{Document}
         @return: The reply to the sent message.
         @rtype: I{builtin} or I{subclass of} L{Object}
         """
@@ -496,21 +634,36 @@ class SoapClient:
         location = self.location()
         binding = self.method.binding.input
         transport = self.options.transport
-        log.debug('sending to (%s)\nmessage:\n%s', location, msg)
+        retxml = self.options.retxml
+        prettyxml = self.options.prettyxml
+        log.debug('sending to (%s)\nmessage:\n%s', location, soapenv)
         try:
-            self.last_sent(Document(msg))
-            request = Request(location, str(msg))
+            self.last_sent(soapenv)
+            plugins = PluginContainer(self.options.plugins)
+            plugins.message.marshalled(envelope=soapenv.root())
+            if prettyxml:
+                soapenv = soapenv.str()
+            else:
+                soapenv = soapenv.plain()
+            soapenv = soapenv.encode('utf-8')
+            plugins.message.sending(envelope=soapenv)
+            request = Request(location, soapenv)
             request.headers = self.headers()
             reply = transport.send(request)
-            result = self.succeeded(binding, reply.message)
+            ctx = plugins.message.received(reply=reply.message)
+            reply.message = ctx.reply
+            if retxml:
+                result = reply.message
+            else:
+                result = self.succeeded(binding, reply.message)
         except TransportError as e:
-            if e.httpcode in (202,204):
+            if e.httpcode in (202, 204):
                 result = None
             else:
                 log.error(self.last_sent())
                 result = self.failed(binding, e)
         return result
-    
+
     def headers(self):
         """
         Get http headers or the http/https request.
@@ -518,34 +671,39 @@ class SoapClient:
         @rtype: dict
         """
         action = self.method.soap.action
-        stock = { 'Content-Type' : 'text/xml', 'SOAPAction': action }
-        result = dict(stock, **self.options.headers)
+        result = {
+            'Content-Type': 'text/xml; charset=utf-8',
+            'SOAPAction': action
+        }
+        result.update(self.options.headers)
         log.debug('headers = %s', result)
         return result
-    
+
     def succeeded(self, binding, reply):
         """
         Request succeeded, process the reply
         @param binding: The binding to be used to process the reply.
         @type binding: L{bindings.binding.Binding}
+        @param reply: The raw reply text.
+        @type reply: str
         @return: The method result.
         @rtype: I{builtin}, L{Object}
         @raise WebFault: On server.
         """
         log.debug('http succeeded:\n%s', reply)
+        plugins = PluginContainer(self.options.plugins)
         if len(reply) > 0:
-            r, p = binding.get_reply(self.method, reply)
-            self.last_received(r)
-            if self.options.faults:
-                return p
-            else:
-                return (200, p)
+            reply, result = binding.get_reply(self.method, reply)
+            self.last_received(reply)
         else:
-            if self.options.faults:
-                return None
-            else:
-                return (200, None)
-        
+            result = None
+        ctx = plugins.message.unmarshalled(reply=result)
+        result = ctx.reply
+        if self.options.faults:
+            return result
+        else:
+            return (200, result)
+
     def failed(self, binding, error):
         """
         Request failed, process reply based on reason
@@ -554,7 +712,7 @@ class SoapClient:
         @param error: The http error message
         @type error: L{transport.TransportError}
         """
-        status, reason = (error.httpcode, tostr(error))
+        status, reason = (error.httpcode, suds.tostr(error))
         reply = error.fp.read()
         log.debug('http failed:\n%s', reply)
         if status == 500:
@@ -570,8 +728,9 @@ class SoapClient:
             return (status, None)
 
     def location(self):
-        return self.options.get('location', self.method.location)
-    
+        p = Unskin(self.options)
+        return p.get('location', self.method.location.decode('utf-8'))
+
     def last_sent(self, d=None):
         key = 'tx'
         messages = self.client.messages
@@ -579,7 +738,7 @@ class SoapClient:
             return messages.get(key)
         else:
             messages[key] = d
-        
+
     def last_received(self, d=None):
         key = 'rx'
         messages = self.client.messages
@@ -593,14 +752,14 @@ class SimClient(SoapClient):
     """
     Loopback client used for message/reply simulation.
     """
-    
+
     injkey = '__inject'
-    
+
     @classmethod
     def simulation(cls, kwargs):
         """ get whether loopback has been specified in the I{kwargs}. """
-        return kwargs.has_key(SimClient.injkey)
-        
+        return SimClient.injkey in kwargs.keys()
+
     def invoke(self, args, kwargs):
         """
         Send the required soap message to invoke the specified method
@@ -617,23 +776,25 @@ class SimClient(SoapClient):
         fault = simulation.get('fault')
         if msg is None:
             if reply is not None:
-                return self.__reply(reply)
+                return self.__reply(reply, args, kwargs)
             if fault is not None:
                 return self.__fault(fault)
             raise Exception('(reply|fault) expected when msg=None')
-        msg = Parser().parse(string=msg)
+        sax = Parser()
+        msg = sax.parse(string=msg)
         return self.send(msg)
-    
-    def __reply(self, reply):
+
+    def __reply(self, reply, args, kwargs):
         """ simulate the reply """
+        binding = self.method.binding.input
+        msg = binding.get_message(self.method, args, kwargs)
+        log.debug('inject (simulated) send message:\n%s', msg)
         binding = self.method.binding.output
-        binding.options = self.options
         return self.succeeded(binding, reply)
-    
+
     def __fault(self, reply):
         """ simulate the (fault) reply """
         binding = self.method.binding.output
-        binding.options = self.options
         if self.options.faults:
             r, p = binding.get_fault(reply)
             self.last_received(r)

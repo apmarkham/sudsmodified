@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -20,6 +20,7 @@ Provides XML I{special character} encoder classes.
 
 import re
 
+
 class Encoder:
     """
     An XML special character encoder/decoder.
@@ -30,14 +31,23 @@ class Encoder:
     @cvar special: A list of special characters
     @type special: [char]
     """
-    
-    encodings = \
-        (( '&(?!(amp|lt|gt|quot|apos);)', '&amp;' ),( '<', '&lt;' ),( '>', '&gt;' ),( '"', '&quot;' ),("'", '&apos;' ))
-    decodings = \
-        (( '&amp;', '&' ),( '&lt;', '<' ),( '&gt;', '>' ),( '&quot;', '"' ),( '&apos;', "'" ))
-    special = \
-        ('&', '<', '>', '"', "'")
-    
+
+    encodings = (
+        ('&', '&amp;'),
+        ('<', '&lt;'),
+        ('>', '&gt;'),
+        ('"', '&quot;'),
+        ("'", '&apos;')
+    )
+    decodings = (
+        ('&lt;', '<'),
+        ('&gt;', '>'),
+        ('&quot;', '"'),
+        ('&apos;', "'"),
+        ('&amp;', '&')
+    )
+    special = ('&', '<', '>', '"', "'")
+
     def needsEncoding(self, s):
         """
         Get whether string I{s} contains special characters.
@@ -46,11 +56,12 @@ class Encoder:
         @return: True if needs encoding.
         @rtype: boolean
         """
-        for c in self.special:
-            if c in s:
-                return True
+        if isinstance(s, str):
+            for c in self.special:
+                if c in s:
+                    return True
         return False
-    
+
     def encode(self, s):
         """
         Encode special characters found in string I{s}.
@@ -59,11 +70,11 @@ class Encoder:
         @return: The encoded string.
         @rtype: str
         """
-        if isinstance(s, basestring) and self.needsEncoding(s):
+        if isinstance(s, str) and self.needsEncoding(s):
             for x in self.encodings:
                 s = re.sub(x[0], x[1], s)
         return s
-    
+
     def decode(self, s):
         """
         Decode special characters encodings found in string I{s}.
@@ -72,7 +83,7 @@ class Encoder:
         @return: The decoded string.
         @rtype: str
         """
-        if isinstance(s, basestring) and '&' in s:
+        if isinstance(s, str) and '&' in s:
             for x in self.decodings:
                 s = s.replace(x[0], x[1])
         return s

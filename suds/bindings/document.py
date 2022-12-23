@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -19,7 +19,6 @@ Provides classes for the (WS) SOAP I{document/literal}.
 """
 
 from logging import getLogger
-from suds import *
 from suds.bindings.binding import Binding
 from suds.sax.element import Element
 
@@ -32,31 +31,24 @@ class Document(Binding):
     since document/encoded is pretty much dead.
     Although the soap specification supports multiple documents within the soap
     <body/>, it is very uncommon.  As such, suds presents an I{RPC} view of
-    service methods defined with a single document parameter.  This is done so 
-    that the user can pass individual parameters instead of one, single document.
-    To support the complete specification, service methods defined with multiple documents
-    (multiple message parts), must present a I{document} view for that method.
+    service methods defined with a single document parameter.  This is done so
+    that the user can pass individual parameters instead of one, single
+    document.
+    To support the complete specification, service methods defined withs
+    multiple documents (multiple message parts), must present a I{document}
+    view for that method.
     """
-        
+
     def bodycontent(self, method, args, kwargs):
-        """
-        Get the content for the soap I{body} node.
-        The I{wrapped} vs I{bare} style is detected in 2 ways.
-        If there is 2+ parts in the message then it is I{bare}.
-        If there is only (1) part and that part resolves to a builtin then
-        it is I{bare}.  Otherwise, it is I{wrapped}.
-        @param method: A service method.
-        @type method: I{service.Method}
-        @param args: method parameter values
-        @type args: list
-        @param kwargs: Named (keyword) args for the method invoked.
-        @type kwargs: dict
-        @return: The xml content for the <body/>
-        @rtype: [L{Element},..]
-        """
-        if not len(method.message.input.parts):
+        #
+        # The I{wrapped} vs I{bare} style is detected in 2 ways.
+        # If there is 2+ parts in the message then it is I{bare}.
+        # If there is only (1) part and that part resolves to a builtin then
+        # it is I{bare}.  Otherwise, it is I{wrapped}.
+        #
+        if not len(method.soap.input.body.parts):
             return ()
-        wrapped = method.message.input.wrapped
+        wrapped = method.soap.input.body.wrapped
         if wrapped:
             pts = self.bodypart_types(method)
             root = self.document(pts[0])
@@ -79,21 +71,12 @@ class Document(Binding):
         return root
 
     def replycontent(self, method, body):
-        """
-        Get the reply body content.
-        @param method: A service method.
-        @type method: I{service.Method}
-        @param body: The soap body
-        @type body: L{Element}
-        @return: the body content
-        @rtype: [L{Element},...]
-        """
-        wrapped = method.message.output.wrapped
+        wrapped = method.soap.output.body.wrapped
         if wrapped:
             return body[0].children
         else:
             return body.children
-        
+
     def document(self, wrapper):
         """
         Get the document root.  For I{document/literal}, this is the
@@ -107,40 +90,51 @@ class Document(Binding):
         ns = wrapper[1].namespace('ns0')
         d = Element(tag, ns=ns)
         return d
-        
+
+    def mkparam(self, method, pdef, object):
+        #
+        # Expand list parameters into individual parameters
+        # each with the type information.  This is because in document
+        # arrays are simply unbounded elements.
+        #
+        if isinstance(object, (list, tuple)):
+            tags = []
+            for item in object:
+                tags.append(self.mkparam(method, pdef, item))
+            return tags
+        else:
+            return Binding.mkparam(self, method, pdef, object)
+
     def param_defs(self, method):
-        """
-        Get parameter definitions for document literal.
-        The I{wrapped} vs I{bare} style is detected in 2 ways.
-        If there is 2+ parts in the message then it is I{bare}.
-        If there is only (1) part and that part resolves to a builtin then
-        it is I{bare}.  Otherwise, it is I{wrapped}.
-        @param method: A method name.
-        @type method: basestring
-        @return: A collection of parameter definitions
-        @rtype: [(str, L{xsd.sxbase.SchemaObject}),..]
-        """
+        #
+        # Get parameter definitions for document literal.
+        # The I{wrapped} vs I{bare} style is detected in 2 ways.
+        # If there is 2+ parts in the message then it is I{bare}.
+        # If there is only (1) part and that part resolves to a builtin then
+        # it is I{bare}.  Otherwise, it is I{wrapped}.
+        #
         pts = self.bodypart_types(method)
-        wrapped = method.message.input.wrapped
+        wrapped = method.soap.input.body.wrapped
         if not wrapped:
             return pts
         result = []
+        # wrapped
         for p in pts:
             resolved = p[1].resolve()
             for child, ancestry in resolved:
+                if child.isattr():
+                    continue
+                if self.bychoice(ancestry):
+                    log.debug('%s\ncontained by <choice/>, excluded as param for %s()',
+                              child,
+                              method.name)
+                    continue
                 result.append((child.name, child))
         return result
-    
+
     def returned_types(self, method):
-        """
-        Get the referenced type returned by the I{method}.
-        @param method: The name of a method.
-        @type method: str
-        @return: The name of the type return by the method.
-        @rtype: [L{xsd.sxbase.SchemaObject}]
-        """
         result = []
-        wrapped = method.message.output.wrapped
+        wrapped = method.soap.output.body.wrapped
         rts = self.bodypart_types(method, input=False)
         if wrapped:
             for pt in rts:
@@ -151,3 +145,16 @@ class Document(Binding):
         else:
             result += rts
         return result
+
+    def bychoice(self, ancestry):
+        """
+        The ancestry contains a <choice/>
+        @param ancestry: A list of ancestors.
+        @type ancestry: list
+        @return: True if contains <choice/>
+        @rtype: boolean
+        """
+        for x in ancestry:
+            if x.choice():
+                return True
+        return False

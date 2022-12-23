@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -18,18 +18,3 @@
 Provides modules containing classes to support Web Services (SOAP)
 bindings.
 """
-
-class xlstr(unicode):
-    """
-    Language aware string contains a I{lang} attribute.
-    @ivar lang: The string language when set (may be None).
-    @type lang: str
-    """
-    @classmethod
-    def string(cls, s, lang=None):
-        xls = xlstr(s)
-        xls.lang = lang
-        return xls
-    def __init__(self, s):
-        unicode.__init__(self, s)
-        self.lang = None

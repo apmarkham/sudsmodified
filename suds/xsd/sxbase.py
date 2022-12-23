@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -20,14 +20,16 @@ schema objects.
 """
 
 from logging import getLogger
-from suds import *
-from suds.xsd import *
+from suds import objid, Repr
+from suds.compat import unicode
+from suds.xsd import isqref, Filter, qualify
 from suds.sax.element import Element
+from suds.sax import Namespace
 
 log = getLogger(__name__)
 
 
-class SchemaObject:
+class SchemaObject(object):
     """
     A schema object is an extension to object object with
     with schema awareness.
@@ -41,6 +43,8 @@ class SchemaObject:
     @ivar nillable: A flag that inidcates that @nillable
         has a value of I{true}.
     @type nillable: boolean
+    @ivar default: The default value.
+    @type default: object
     @ivar rawchildren: A list raw of all children.
     @type rawchildren: [L{SchemaObject},...]
     """
@@ -48,7 +52,7 @@ class SchemaObject:
     @classmethod
     def prepend(cls, d, s, filter=Filter()):
         """
-        Prepend schema object's from B{s}ource list to 
+        Prepend schema object's from B{s}ource list to
         the B{d}estination list while applying the filter.
         @param d: The destination list.
         @type d: list
@@ -62,11 +66,11 @@ class SchemaObject:
             if x in filter:
                 d.insert(i, x)
                 i += 1
-    
+
     @classmethod
     def append(cls, d, s, filter=Filter()):
         """
-        Append schema object's from B{s}ource list to 
+        Append schema object's from B{s}ource list to
         the B{d}estination list while applying the filter.
         @param d: The destination list.
         @type d: list
@@ -91,13 +95,16 @@ class SchemaObject:
         self.id = objid(self)
         self.name = root.get('name')
         self.qname = (self.name, schema.tns[1])
+        self.min = root.get('minOccurs')
+        self.max = root.get('maxOccurs')
         self.type = root.get('type')
         self.ref = root.get('ref')
         self.form_qualified = schema.form_qualified
         self.nillable = False
+        self.default = root.get('default')
         self.rawchildren = []
         self.cache = {}
-        
+
     def attributes(self, filter=Filter()):
         """
         Get only the attribute content.
@@ -111,7 +118,7 @@ class SchemaObject:
             if child.isattr() and child in filter:
                 result.append((child, ancestry))
         return result
-                
+
     def children(self, filter=Filter()):
         """
         Get only the I{direct} or non-attribute content.
@@ -125,7 +132,7 @@ class SchemaObject:
             if not child.isattr() and child in filter:
                 result.append((child, ancestry))
         return result
-                
+
     def get_attribute(self, name):
         """
         Get (find) a I{non-attribute} attribute by name.
@@ -138,7 +145,7 @@ class SchemaObject:
             if child.name == name:
                 return (child, ancestry)
         return (None, [])
-                
+
     def get_child(self, name):
         """
         Get (find) a I{non-attribute} child by name.
@@ -164,26 +171,43 @@ class SchemaObject:
         if ns[0] is None:
             ns = (prefix, ns[1])
         return ns
-    
+
     def default_namespace(self):
         return self.root.defaultNamespace()
-    
+
     def unbounded(self):
         """
         Get whether this node is unbounded I{(a collection)}
         @return: True if unbounded, else False.
         @rtype: boolean
         """
-        return False
-    
+        max = self.max
+        if max is None:
+            max = '1'
+        if max.isdigit():
+            return (int(max) > 1)
+        else:
+            return max == 'unbounded'
+
     def optional(self):
         """
         Get whether this type is optional.
         @return: True if optional, else False
         @rtype: boolean
         """
-        return False
-    
+        min = self.min
+        if min is None:
+            min = '1'
+        return min == '0'
+
+    def required(self):
+        """
+        Get whether this type is required.
+        @return: True if required, else False
+        @rtype: boolean
+        """
+        return not self.optional()
+
     def resolve(self, nobuiltin=False):
         """
         Resolve and return the nodes true self.
@@ -193,15 +217,23 @@ class SchemaObject:
         @rtype: L{SchemaObject}
         """
         return self.cache.get(nobuiltin, self)
-    
+
     def sequence(self):
         """
         Get whether this is an <xs:sequence/>
+        @return: True if <xs:sequence/>, else False
+        @rtype: boolean
+        """
+        return False
+
+    def xslist(self):
+        """
+        Get whether this is an <xs:list/>
         @return: True if any, else False
         @rtype: boolean
         """
         return False
-    
+
     def all(self):
         """
         Get whether this is an <xs:all/>
@@ -209,7 +241,7 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-    
+
     def choice(self):
         """
         Get whether this is n <xs:choice/>
@@ -217,7 +249,7 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-        
+
     def any(self):
         """
         Get whether this is an <xs:any/>
@@ -225,7 +257,7 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-    
+
     def builtin(self):
         """
         Get whether this is a schema-instance (xs) type.
@@ -233,7 +265,7 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-    
+
     def enum(self):
         """
         Get whether this is a simple-type containing an enumeration.
@@ -241,7 +273,7 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-    
+
     def isattr(self):
         """
         Get whether the object is a schema I{attribute} definition.
@@ -249,22 +281,36 @@ class SchemaObject:
         @rtype: boolean
         """
         return False
-    
+
     def extension(self):
         """
-        Get whether the object is an extension/restriction
-        @return: True if an extension/restriction, else False.
+        Get whether the object is an extension of another type.
+        @return: True if an extension, else False.
         @rtype: boolean
         """
         return False
-        
+
+    def restriction(self):
+        """
+        Get whether the object is an restriction of another type.
+        @return: True if an restriction, else False.
+        @rtype: boolean
+        """
+        return False
+
+    def mixed(self):
+        """
+        Get whether this I{mixed} content.
+        """
+        return False
+
     def find(self, qref, classes=()):
         """
         Find a referenced type in self or children.
         @param qref: A qualified reference.
         @type qref: qref
         @param classes: A list of classes used to qualify the match.
-        @type classes: [I{class},...] 
+        @type classes: [I{class},...]
         @return: The referenced type.
         @rtype: L{SchemaObject}
         @see: L{qualify()}
@@ -286,7 +332,7 @@ class SchemaObject:
         @return: The converted I{language} type.
         """
         return value
-    
+
     def childtags(self):
         """
         Get a list of valid child tag names.
@@ -294,7 +340,7 @@ class SchemaObject:
         @rtype: [str,...]
         """
         return ()
-    
+
     def dependencies(self):
         """
         Get a list of dependancies for dereferencing.
@@ -302,13 +348,57 @@ class SchemaObject:
         @rtype: (int, [L{SchemaObject},...])
         """
         return (None, [])
-            
+
+    def autoqualified(self):
+        """
+        The list of I{auto} qualified attribute values.
+        Qualification means to convert values into I{qref}.
+        @return: A list of attibute names.
+        @rtype: list
+        """
+        return ['type', 'ref']
+
+    def qualify(self):
+        """
+        Convert attribute values, that are references to other
+        objects, into I{qref}.  Qualfied using default document namespace.
+        Since many wsdls are written improperly: when the document does
+        not define a default namespace, the schema target namespace is used
+        to qualify references.
+        """
+        defns = self.root.defaultNamespace()
+        if Namespace.none(defns):
+            defns = self.schema.tns
+        for a in self.autoqualified():
+            ref = getattr(self, a)
+            if ref is None:
+                continue
+            if isqref(ref):
+                continue
+            qref = qualify(ref, self.root, defns)
+            log.debug('%s, convert %s="%s" to %s', self.id, a, ref, qref)
+            setattr(self, a, qref)
+
     def merge(self, other):
         """
         Merge another object as needed.
         """
-        pass
-            
+        other.qualify()
+        for n in ('name',
+                  'qname',
+                  'min',
+                  'max',
+                  'default',
+                  'type',
+                  'nillable',
+                  'form_qualified',):
+            if getattr(self, n) is not None:
+                continue
+            v = getattr(other, n)
+            if v is None:
+                continue
+            setattr(self, n, v)
+
     def content(self, collection=None, filter=Filter(), history=None):
         """
         Get a I{flattened} list of this nodes contents.
@@ -333,7 +423,7 @@ class SchemaObject:
         for c in self.rawchildren:
             c.content(collection, filter, history[:])
         return collection
-    
+
     def str(self, indent=0, history=None):
         """
         Get a string representation of this object.
@@ -342,13 +432,13 @@ class SchemaObject:
         @return: A string.
         @rtype: str
         """
-        if history is None: 
+        if history is None:
             history = []
         if self in history:
             return '%s ...' % Repr(self)
         history.append(self)
-        tab = '%*s'%(indent*3, '')
-        result  = []
+        tab = '%*s' % (indent * 3, '')
+        result = []
         result.append('%s<%s' % (tab, self.id))
         for n in self.description():
             if not hasattr(self, n):
@@ -369,7 +459,7 @@ class SchemaObject:
         else:
             result.append(' />')
         return ''.join(result)
-    
+
     def description(self):
         """
         Get the names used for str() and repr() description.
@@ -377,13 +467,13 @@ class SchemaObject:
         @rtype: [str,...]
         """
         return ()
-        
+
     def __str__(self):
-        return unicode(self).encode('utf-8')
-            
+        return self.__repr__()
+
     def __unicode__(self):
-        return unicode(self.str())
-    
+         return self.__repr__()
+
     def __repr__(self):
         s = []
         s.append('<%s' % self.id)
@@ -396,16 +486,17 @@ class SchemaObject:
             s.append(' %s="%s"' % (n, v))
         s.append(' />')
         myrep = ''.join(s)
-        return myrep.encode('utf-8')
-    
+        return myrep
+
     def __len__(self):
         n = 0
-        for x in self: n += 1
+        for x in self:
+            n += 1
         return n
-    
+
     def __iter__(self):
         return Iter(self)
-    
+
     def __getitem__(self, index):
         i = 0
         for c in self:
@@ -415,16 +506,16 @@ class SchemaObject:
 
 class Iter:
     """
-    The content iterator - used to iterate the L{Content} children.  The iterator
-    provides a I{view} of the children that is free of container elements
-    such as <sequence/> and <choice/>.
+    The content iterator - used to iterate the L{Content} children.  The
+    iterator provides a I{view} of the children that is free of container
+    elements such as <sequence/> and <choice/>.
     @ivar stack: A stack used to control nesting.
     @type stack: list
     """
-    
+
     class Frame:
         """ A content iterator frame. """
-        
+
         def __init__(self, sx):
             """
             @param sx: A schema object.
@@ -433,7 +524,7 @@ class Iter:
             self.sx = sx
             self.items = sx.rawchildren
             self.index = 0
-            
+
         def next(self):
             """
             Get the I{next} item in the frame's collection.
@@ -444,7 +535,7 @@ class Iter:
                 result = self.items[self.index]
                 self.index += 1
                 return result
-    
+
     def __init__(self, sx):
         """
         @param sx: A schema object.
@@ -452,7 +543,7 @@ class Iter:
         """
         self.stack = []
         self.push(sx)
-        
+
     def push(self, sx):
         """
         Create a frame and push the specified object.
@@ -460,7 +551,7 @@ class Iter:
         @type sx: L{SchemaObject}
         """
         self.stack.append(Iter.Frame(sx))
-        
+
     def pop(self):
         """
         Pop the I{top} frame.
@@ -472,7 +563,7 @@ class Iter:
             return self.stack.pop()
         else:
             raise StopIteration()
-        
+
     def top(self):
         """
         Get the I{top} frame.
@@ -484,7 +575,10 @@ class Iter:
             return self.stack[-1]
         else:
             raise StopIteration()
-    
+
+    def __next__(self):
+        return self.next()
+
     def next(self):
         """
         Get the next item.
@@ -503,7 +597,7 @@ class Iter:
                 return (result, ancestry)
             self.push(result)
             return self.next()
-    
+
     def __iter__(self):
         return self
 
@@ -512,7 +606,7 @@ class XBuiltin(SchemaObject):
     """
     Represents an (xsd) schema <xs:*/> node
     """
-    
+
     def __init__(self, schema, name):
         """
         @param schema: The containing schema.
@@ -522,13 +616,13 @@ class XBuiltin(SchemaObject):
         SchemaObject.__init__(self, schema, root)
         self.name = name
         self.nillable = True
-            
+
     def namespace(self, prefix=None):
         return Namespace.xsdns
-    
+
     def builtin(self):
         return True
-    
+
     def resolve(self, nobuiltin=False):
         return self
 
@@ -539,3 +633,40 @@ class Content(SchemaObject):
     real XML document content.
     """
     pass
+
+
+class NodeFinder:
+    """
+    Find nodes based on flexable criteria.  The I{matcher} is
+    may be any object that implements a match(n) method.
+    @ivar matcher: An object used as criteria for match.
+    @type matcher: I{any}.match(n)
+    @ivar limit: Limit the number of matches.  0=unlimited.
+    @type limit: int
+    """
+    def __init__(self, matcher, limit=0):
+        """
+        @param matcher: An object used as criteria for match.
+        @type matcher: I{any}.match(n)
+        @param limit: Limit the number of matches.  0=unlimited.
+        @type limit: int
+        """
+        self.matcher = matcher
+        self.limit = limit
+
+    def find(self, node, list):
+        """
+        Traverse the tree looking for matches.
+        @param node: A node to match on.
+        @type node: L{SchemaObject}
+        @param list: A list to fill.
+        @type list: list
+        """
+        if self.matcher.match(node):
+            list.append(node)
+            self.limit -= 1
+            if self.limit == 0:
+                return
+        for c in node.rawchildren:
+            self.find(c, list)
+        return self

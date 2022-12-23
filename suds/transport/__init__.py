@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -25,6 +25,7 @@ class TransportError(Exception):
         self.httpcode = httpcode
         self.fp = fp
 
+
 class Request:
     """
     A transport request
@@ -46,13 +47,13 @@ class Request:
         self.url = url
         self.headers = {}
         self.message = message
-        
+
     def __str__(self):
         s = []
         s.append('URL:%s' % self.url)
         s.append('HEADERS: %s' % self.headers)
         s.append('MESSAGE:')
-        s.append(self.message)
+        s.append(str(self.message))
         return '\n'.join(s)
 
 
@@ -79,13 +80,13 @@ class Reply:
         self.code = code
         self.headers = headers
         self.message = message
-        
+
     def __str__(self):
         s = []
         s.append('CODE: %s' % self.code)
         s.append('HEADERS: %s' % self.headers)
         s.append('MESSAGE:')
-        s.append(self.message)
+        s.append(str(self.message))
         return '\n'.join(s)
 
 
@@ -93,19 +94,15 @@ class Transport:
     """
     The transport I{interface}.
     """
-    
-    def __init__(self, options=None):
+
+    def __init__(self):
         """
-        @param options: A suds options object.
-        @type options: L{suds.options.Options}
+        Constructor.
         """
-        if options is None:
-            from suds.options import Options
-            self.options = Options()
-            del Options
-        else:
-            self.options = options
-    
+        from suds.transport.options import Options
+        self.options = Options()
+        del Options
+
     def open(self, request):
         """
         Open the url in the specified request.
@@ -116,7 +113,7 @@ class Transport:
         @raise TransportError: On all transport errors.
         """
         raise Exception('not-implemented')
-    
+
     def send(self, request):
         """
         Send soap message.  Implementations are expected to handle:
@@ -132,71 +129,3 @@ class Transport:
         @raise TransportError: On all transport errors.
         """
         raise Exception('not-implemented')
-
-
-class Cache:
-    """
-    The URL caching object.
-    """
-    
-    def put(self, url, fp):
-        """
-        Put an item into the cache.
-        @param url: A url.
-        @type url: str
-        @param fp: A file stream.
-        @type fp: stream
-        @return: The stream.
-        @rtype: stream
-        """
-        raise Exception('not-implemented')
-    
-    def get(self, url):
-        """
-        Get an item from the cache by url.
-        @param url: A url.
-        @type url: str
-        @return: A stream when found, else None.
-        @rtype: stream
-        """
-        raise Exception('not-implemented')
-    
-    def clear(self):
-        """
-        Clear the cached items.
-        """
-        raise Exception('not-implemented')
-
-
-class NoCache(Cache):
-    """
-    The NO caching implementation.
-    """
-    
-    def put(self, url, fp):
-        """
-        Put an item into the cache.
-        @param url: A url.
-        @type url: str
-        @param fp: A file stream.
-        @type fp: stream
-        @return: The stream.
-        @rtype: stream
-        """
-        return fp
-    
-    def get(self, url):
-        """
-        Get an item from the cache by url.
-        @param url: A url.
-        @type url: str
-        @return: A stream when found, else None.
-        @rtype: stream
-        """
-        return None
-    
-    def clear(self):
-        """
-        Clear the cached items.
-        """
-        pass

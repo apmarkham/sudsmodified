@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -18,12 +18,13 @@
 Provides XML I{attribute} classes.
 """
 
-import suds.sax
 from logging import getLogger
-from suds import *
-from suds.sax import *
+from suds.sax import Namespace, splitPrefix
+from suds.sax.text import Text
+from suds.compat import unicode
 
 log = getLogger(__name__)
+
 
 class Attribute:
     """
@@ -42,12 +43,12 @@ class Attribute:
         @param name: The attribute's name with I{optional} namespace prefix.
         @type name: basestring
         @param value: The attribute's value
-        @type value: basestring 
+        @type value: basestring
         """
         self.parent = None
         self.prefix, self.name = splitPrefix(name)
         self.setValue(value)
-        
+
     def clone(self, parent=None):
         """
         Clone this object.
@@ -59,7 +60,7 @@ class Attribute:
         a = Attribute(self.qname(), self.value)
         a.parent = parent
         return a
-    
+
     def qname(self):
         """
         Get the B{fully} qualified name of this attribute
@@ -70,29 +71,44 @@ class Attribute:
             return self.name
         else:
             return ':'.join((self.prefix, self.name))
-        
+
     def setValue(self, value):
         """
         Set the attributes value
         @param value: The new value (may be None)
         @type value: basestring
+        @return: self
+        @rtype: L{Attribute}
         """
-        self.value = sax.encoder.encode(value)
-        
-    def getValue(self, default=''):
+        if isinstance(value, Text):
+            self.value = value
+        else:
+            self.value = Text(value)
+        return self
+
+    def getValue(self, default=Text('')):
         """
         Get the attributes value with optional default.
         @param default: An optional value to be return when the
             attribute's has not been set.
         @type default: basestring
         @return: The attribute's value, or I{default}
-        @rtype: basestring
+        @rtype: L{Text}
         """
-        result = sax.encoder.decode(self.value)
-        if result is None:
-            result = default
-        return result
-        
+        if self.hasText():
+            return self.value
+        else:
+            return default
+
+    def hasText(self):
+        """
+        Get whether the attribute has I{text} and that it is not an empty
+        (zero length) string.
+        @return: True when has I{text}.
+        @rtype: boolean
+        """
+        return self.value is not None and len(self.value)
+
     def namespace(self):
         """
         Get the attributes namespace.  This may either be the namespace
@@ -104,7 +120,7 @@ class Attribute:
             return Namespace.default
         else:
             return self.resolvePrefix(self.prefix)
-        
+
     def resolvePrefix(self, prefix):
         """
         Resolve the specified prefix to a known namespace.
@@ -117,24 +133,55 @@ class Attribute:
         if self.parent is not None:
             ns = self.parent.resolvePrefix(prefix)
         return ns
-    
+
+    def match(self, name=None, ns=None):
+        """
+        Match by (optional) name and/or (optional) namespace.
+        @param name: The optional attribute tag name.
+        @type name: str
+        @param ns: An optional namespace.
+        @type ns: (I{prefix}, I{name})
+        @return: True if matched.
+        @rtype: boolean
+        """
+        if name is None:
+            byname = True
+        else:
+            byname = self.name == name
+        if ns is None:
+            byns = True
+        else:
+            byns = self.namespace()[1] == ns[1]
+        return byname and byns
+
     def __eq__(self, rhs):
         """ equals operator """
         return rhs is not None and \
             isinstance(rhs, Attribute) and \
             self.prefix == rhs.name and \
             self.name == rhs.name
-            
+
     def __repr__(self):
         """ get a string representation """
-        return \
-            'attr (prefix=%s, name=%s, value=(%s))' %\
-                (self.prefix, self.name, self.value)
+        return 'attr (prefix=%s, name=%s, value=(%s))' % (
+            self.prefix,
+            self.name,
+            self.value)
 
     def __str__(self):
         """ get an xml string representation """
-        return unicode(self).encode('utf-8')
-    
+        n = self.qname()
+        if self.hasText():
+            v = self.value.escape()
+        else:
+            v = self.value
+        return u'%s="%s"' % (n, v)
+
     def __unicode__(self):
         """ get an xml string representation """
-        return u'%s="%s"' % (self.qname(), self.value)
+        n = self.qname()
+        if self.hasText():
+            v = self.value.escape()
+        else:
+            v = self.value
+        return u'%s="%s"' % (n, v)

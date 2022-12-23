@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -19,7 +19,8 @@ Provides classes for the (WS) SOAP I{rpc/literal} and I{rpc/encoded} bindings.
 """
 
 from logging import getLogger
-from suds import *
+from suds.mx.encoded import Encoded as MxEncoded
+from suds.umx.encoded import Encoded as UmxEncoded
 from suds.bindings.binding import Binding, envns
 from suds.sax.element import Element
 
@@ -28,39 +29,23 @@ log = getLogger(__name__)
 
 encns = ('SOAP-ENC', 'http://schemas.xmlsoap.org/soap/encoding/')
 
+
 class RPC(Binding):
     """
     RPC/Literal binding style.
     """
-        
+
+    def param_defs(self, method):
+        return self.bodypart_types(method)
+
     def envelope(self, header, body):
-        """
-        Build the B{<Envelope/>} for an soap outbound message.
-        @param header: The soap message B{header}.
-        @type header: L{Element}
-        @param body: The soap message B{body}.
-        @type body: L{Element}
-        @return: The soap envelope containing the body and header.
-        @rtype: L{Element}
-        """
         env = Binding.envelope(self, header, body)
         env.addPrefix(encns[0], encns[1])
-        env.set('%s:encodingStyle' % envns[0], 
+        env.set('%s:encodingStyle' % envns[0],
                 'http://schemas.xmlsoap.org/soap/encoding/')
         return env
-        
+
     def bodycontent(self, method, args, kwargs):
-        """
-        Get the content for the soap I{body}.
-        @param method: A service method.
-        @type method: I{service.Method}
-        @param args: method parameter values
-        @type args: list
-        @param kwargs: Named (keyword) args for the method invoked.
-        @type kwargs: dict
-        @return: The xml content for the <body/>
-        @rtype: L{Element}
-        """
         n = 0
         root = self.method(method)
         for pd in self.param_defs(method):
@@ -73,19 +58,10 @@ class RPC(Binding):
                 root.append(p)
             n += 1
         return root
-    
+
     def replycontent(self, method, body):
-        """
-        Get the reply body content.
-        @param method: A service method.
-        @type method: I{service.Method}
-        @param body: The soap body
-        @type body: L{Element}
-        @return: the body content
-        @rtype: [L{Element},...]
-        """
         return body[0].children
-        
+
     def method(self, method):
         """
         Get the document root.  For I{rpc/(literal|encoded)}, this is the
@@ -101,17 +77,6 @@ class RPC(Binding):
         method = Element(method.name, ns=ns)
         return method
 
-    def param_defs(self, method):
-        """
-        Get parameter definitions.  
-        Each I{pdef} is a tuple (I{name}, L{xsd.sxbase.SchemaObject})
-        @param method: A servic emethod.
-        @type method: I{service.Method}
-        @return: A collection of parameter definitions
-        @rtype: [I{pdef},..]
-        """
-        return self.bodypart_types(method)
-    
 
 class Encoded(RPC):
     """
@@ -119,10 +84,15 @@ class Encoded(RPC):
     """
 
     def marshaller(self):
+        return MxEncoded(self.schema())
+
+    def unmarshaller(self, typed=True):
         """
-        Get the appropriate marshaller.
-        @return: Either the I{encoded} marshaller.
-        @rtype: L{Marshaller}
+        Get the appropriate XML decoder.
+        @return: Either the (basic|typed) unmarshaller.
+        @rtype: L{UmxTyped}
         """
-        output = self.xcodecs[1]
-        return output.encoded
+        if typed:
+            return UmxEncoded(self.schema())
+        else:
+            return RPC.unmarshaller(self, typed)

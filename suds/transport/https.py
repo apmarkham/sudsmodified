@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -15,40 +15,85 @@
 # written by: Jeff Ortel ( jortel@redhat.com )
 
 """
-Contains transport interface (classes) and reference implementation.
+Contains classes for basic HTTP (authenticated) transport implementations.
 """
 
-import urllib2 as u2
-from suds.transport import *
 from suds.transport.http import HttpTransport
 from logging import getLogger
+from urllib.request import (
+    HTTPPasswordMgrWithDefaultRealm,
+    HTTPBasicAuthHandler)
 
 log = getLogger(__name__)
 
 
 class HttpAuthenticated(HttpTransport):
     """
-    Provides basic http authentication.
+    Provides basic http authentication that follows the RFC-2617 specification.
+    As defined by specifications, credentials are provided to the server
+    upon request (HTTP/1.0 401 Authorization Required) by the server only.
     @ivar pm: The password manager.
     @ivar handler: The authentication handler.
     """
-    
-    def __init__(self, options):
-        HttpTransport.__init__(self, options)
-        self.pm = u2.HTTPPasswordMgrWithDefaultRealm()
-        self.handler = u2.HTTPBasicAuthHandler(self.pm)
-        self.urlopener = u2.build_opener(self.handler)
-        
+
+    def __init__(self, **kwargs):
+        """
+        @param kwargs: Keyword arguments.
+            - B{proxy} - An http proxy to be specified on requests.
+                 The proxy is defined as {protocol:proxy,}
+                    - type: I{dict}
+                    - default: {}
+            - B{timeout} - Set the url open timeout (seconds).
+                    - type: I{float}
+                    - default: 90
+            - B{username} - The username used for http authentication.
+                    - type: I{str}
+                    - default: None
+            - B{password} - The password used for http authentication.
+                    - type: I{str}
+                    - default: None
+        """
+        HttpTransport.__init__(self, **kwargs)
+        self.pm = HTTPPasswordMgrWithDefaultRealm()
+
     def open(self, request):
-        self.__addcredentials(request)
-        return  HttpTransport.open(self, request)
+        self.addcredentials(request)
+        return HttpTransport.open(self, request)
 
     def send(self, request):
-        self.__addcredentials(request)
+        self.addcredentials(request)
         return HttpTransport.send(self, request)
-    
-    def __addcredentials(self, request):
-        user = self.options.username
-        pwd = self.options.password
-        if user is not None:
-            self.pm.add_password(None, request.url, user, pwd)
+
+    def addcredentials(self, request):
+        credentials = self.credentials()
+        if not (None in credentials):
+            u = credentials[0]
+            p = credentials[1]
+            self.pm.add_password(None, request.url, u, p)
+
+    def credentials(self):
+        return (self.options.username, self.options.password)
+
+    def u2handlers(self):
+            handlers = HttpTransport.u2handlers(self)
+            handlers.append(HTTPBasicAuthHandler(self.pm))
+            return handlers
+
+
+class WindowsHttpAuthenticated(HttpAuthenticated):
+    """
+    Provides Windows (NTLM) http authentication.
+    @ivar pm: The password manager.
+    @ivar handler: The authentication handler.
+    @author: Christopher Bess
+    """
+
+    def u2handlers(self):
+        # try to import ntlm support
+        try:
+            from ntlm3 import HTTPNtlmAuthHandler
+        except ImportError:
+            raise Exception("Cannot import python-ntlm3 module")
+        handlers = HttpTransport.u2handlers(self)
+        handlers.append(HTTPNtlmAuthHandler.HTTPNtlmAuthHandler(self.pm))
+        return handlers

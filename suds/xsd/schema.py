@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -22,23 +22,23 @@ Most of the I{value-add} provided by the model is centered around
 tranparent referenced type resolution and targeted denormalization.
 """
 
-from logging import getLogger
-import suds.metrics
-from suds import *
-from suds.xsd import *
-from suds.xsd.sxbuiltin import *
+
+from suds import objid, Repr
+from suds.xsd import isqref
+from suds.xsd.sxbuiltin import Factory
+from suds.compat import unicode
 from suds.xsd.sxbasic import Factory as BasicFactory
-from suds.xsd.sxbuiltin import Factory as BuiltinFactory
-from suds.xsd.sxbase import SchemaObject
 from suds.xsd.deplist import DepList
+from suds.sax.element import Element
 from suds.sax import splitPrefix, Namespace
+from logging import getLogger
 
 log = getLogger(__name__)
 
 
 class SchemaCollection:
     """
-    A collection of schema objects.  This class is needed because WSDLs 
+    A collection of schema objects.  This class is needed because WSDLs
     may contain more then one <schema/> node.
     @ivar wsdl: A wsdl object.
     @type wsdl: L{suds.wsdl.Definitions}
@@ -47,54 +47,76 @@ class SchemaCollection:
     @ivar namespaces: A dictionary of contained schemas by namespace.
     @type namespaces: {str:L{Schema}}
     """
-    
+
     def __init__(self, wsdl):
         """
         @param wsdl: A wsdl object.
         @type wsdl: L{suds.wsdl.Definitions}
         """
         self.wsdl = wsdl
-        self.options = wsdl.options
         self.children = []
         self.namespaces = {}
-        
+
     def add(self, schema):
         """
         Add a schema node to the collection.  Schema(s) within the same target
         namespace are consolidated.
-        @param schema: A <schema/> entry.
-        @type schema: (L{suds.wsdl.Definitions},L{sax.element.Element})
+        @param schema: A schema object.
+        @type schema: (L{Schema})
         """
-        root, wsdl = schema
-        child = Schema(root, wsdl.url, self.options, container=self)
-        key = child.tns[1]
+        key = schema.tns[1]
         existing = self.namespaces.get(key)
         if existing is None:
-            self.children.append(child)
-            self.namespaces[key] = child
+            self.children.append(schema)
+            self.namespaces[key] = schema
         else:
-            existing.root.children += root.children
-            existing.root.nsprefixes.update(root.nsprefixes)
-        
-    def load(self):
+            existing.root.children += schema.root.children
+            existing.root.nsprefixes.update(schema.root.nsprefixes)
+
+    def load(self, options):
         """
         Load the schema objects for the root nodes.
             - de-references schemas
             - merge schemas
+        @param options: An options dictionary.
+        @type options: L{options.Options}
         @return: The merged schema.
         @rtype: L{Schema}
         """
+        if options.autoblend:
+            self.autoblend()
         for child in self.children:
             child.build()
         for child in self.children:
-            child.open_imports()
+            child.open_imports(options)
         for child in self.children:
             child.dereference()
         log.debug('loaded:\n%s', self)
         merged = self.merge()
         log.debug('MERGED:\n%s', merged)
         return merged
-        
+
+    def autoblend(self):
+        """
+        Ensure that all schemas within the collection
+        import each other which has a blending effect.
+        @return: self
+        @rtype: L{SchemaCollection}
+        """
+        namespaces = self.namespaces.keys()
+        for s in self.children:
+            for ns in namespaces:
+                tns = s.root.get('targetNamespace')
+                if tns == ns:
+                    continue
+                for imp in s.root.getChildren('import'):
+                    if imp.get('namespace') == ns:
+                        continue
+                imp = Element('import', ns=Namespace.xsdns)
+                imp.set('namespace', ns)
+                s.root.append(imp)
+        return self
+
     def locate(self, ns):
         """
         Find a schema by namespace.  Only the URI portion of
@@ -105,7 +127,7 @@ class SchemaCollection:
         @rtype: L{Schema}
         """
         return self.namespaces.get(ns[1])
-    
+
     def merge(self):
         """
         Merge the contained schemas into one.
@@ -119,13 +141,16 @@ class SchemaCollection:
             return schema
         else:
             return None
-    
+
     def __len__(self):
         return len(self.children)
-    
+
     def __str__(self):
-        return unicode(self).encode('utf-8')
-    
+        result = ['\nschema collection']
+        for s in self.children:
+            result.append(s.str(1))
+        return '\n'.join(result)
+
     def __unicode__(self):
         result = ['\nschema collection']
         for s in self.children:
@@ -141,27 +166,31 @@ class Schema:
     @type root: L{sax.element.Element}
     @ivar baseurl: The I{base} URL for this schema.
     @type baseurl: str
-    @ivar options: An options dictionary.
-    @type options: L{options.Options}
     @ivar container: A schema collection containing this schema.
     @type container: L{SchemaCollection}
-    @ivar types: A schema types cache.
-    @type types: {name:L{SchemaObject}}
-    @ivar groups: A schema groups cache.
-    @type groups: {name:L{SchemaObject}}
     @ivar children: A list of direct top level children.
     @type children: [L{SchemaObject},...]
     @ivar all: A list of all (includes imported) top level children.
     @type all: [L{SchemaObject},...]
+    @ivar types: A schema types cache.
+    @type types: {name:L{SchemaObject}}
     @ivar imports: A list of import objects.
     @type imports: [L{SchemaObject},...]
+    @ivar elements: A list of <element/> objects.
+    @type elements: [L{SchemaObject},...]
+    @ivar attributes: A list of <attribute/> objects.
+    @type attributes: [L{SchemaObject},...]
+    @ivar groups: A list of group objects.
+    @type groups: [L{SchemaObject},...]
+    @ivar agrps: A list of attribute group objects.
+    @type agrps: [L{SchemaObject},...]
     @ivar form_qualified: The flag indicating:
         (@elementFormDefault).
     @type form_qualified: bool
     """
-    
+
     Tag = 'schema'
-    
+
     def __init__(self, root, baseurl, options, container=None):
         """
         @param root: The xml root.
@@ -177,7 +206,6 @@ class Schema:
         self.id = objid(self)
         self.tns = self.mktns()
         self.baseurl = baseurl
-        self.options = options
         self.container = container
         self.children = []
         self.all = []
@@ -187,18 +215,20 @@ class Schema:
         self.attributes = {}
         self.groups = {}
         self.agrps = {}
+        if options.doctor is not None:
+            options.doctor.examine(root)
         form = self.root.get('elementFormDefault')
         if form is None:
             self.form_qualified = False
         else:
-            self.form_qualified = ( form == 'qualified' )
+            self.form_qualified = form == 'qualified'
         if container is None:
             self.build()
-            self.open_imports()
+            self.open_imports(options)
             log.debug('built:\n%s', self)
             self.dereference()
             log.debug('dereferenced:\n%s', self)
-                
+
     def mktns(self):
         """
         Make the schema's target namespace.
@@ -210,7 +240,7 @@ class Schema:
         if tns[1] is not None:
             tns[0] = self.root.findPrefix(tns[1])
         return tuple(tns)
-                
+
     def build(self):
         """
         Build the schema (object graph) using the root node
@@ -227,14 +257,14 @@ class Schema:
         self.types = collated[4]
         self.groups = collated[5]
         self.agrps = collated[6]
-        
+
     def merge(self, schema):
         """
         Merge the contents from the schema.  Only objects not already contained
-        in this schema's collections are merged.  This is to provide for bidirectional
-        import which produce cyclic includes.
+        in this schema's collections are merged.  This is to provide for
+        bidirectional import which produce cyclic includes.
         @returns: self
-        @rtype: L{Schema} 
+        @rtype: L{Schema}
         """
         for item in schema.attributes.items():
             if item[0] in self.attributes:
@@ -263,21 +293,23 @@ class Schema:
             self.agrps[item[0]] = item[1]
         schema.merged = True
         return self
-        
-    def open_imports(self):
+
+    def open_imports(self, options):
         """
         Instruct all contained L{sxbasic.Import} children to import
         the schema's which they reference.  The contents of the
         imported schema are I{merged} in.
+        @param options: An options dictionary.
+        @type options: L{options.Options}
         """
         for imp in self.imports:
-            imported = imp.open()
+            imported = imp.open(options)
             if imported is None:
                 continue
-            imported.open_imports()
+            imported.open_imports(options)
             log.debug('imported:\n%s', imported)
             self.merge(imported)
-            
+
     def dereference(self):
         """
         Instruct all children to perform dereferencing.
@@ -288,17 +320,19 @@ class Schema:
             child.content(all)
         deplist = DepList()
         for x in all:
+            x.qualify()
             midx, deps = x.dependencies()
             item = (x, tuple(deps))
             deplist.add(item)
             indexes[x] = midx
         for x, deps in deplist.sort():
             midx = indexes.get(x)
-            if midx is None: continue
+            if midx is None:
+                continue
             d = deps[midx]
             log.debug('(%s) merging %s <== %s', self.tns[1], Repr(x), Repr(d))
             x.merge(d)
-        
+
     def locate(self, ns):
         """
         Find a schema by namespace.  Only the URI portion of
@@ -320,35 +354,35 @@ class Schema:
         @param ref: A str or qref.
         @type ref: (str|qref)
         @return: True if B{not} a builtin, else False.
-        @rtype: bool 
+        @rtype: bool
         """
         if ref is None:
             return True
         else:
-            return ( not self.builtin(ref, context) )
-    
+            return not self.builtin(ref, context)
+
     def builtin(self, ref, context=None):
         """
         Get whether the specified reference is an (xs) builtin.
         @param ref: A str or qref.
         @type ref: (str|qref)
         @return: True if builtin, else False.
-        @rtype: bool 
+        @rtype: bool
         """
         w3 = 'http://www.w3.org'
         try:
             if isqref(ref):
                 ns = ref[1]
-                return ns.startswith(w3)
+                return ref[0] in Factory.tags and ns.startswith(w3)
             if context is None:
-                context = self.root    
+                context = self.root
             prefix = splitPrefix(ref)[0]
             prefixes = context.findPrefixes(w3, 'startswith')
-            return (prefix in prefixes)
+            return prefix in prefixes and ref[0] in Factory.tags
         except:
             return False
-        
-    def instance(self, root, baseurl):
+
+    def instance(self, root, baseurl, options):
         """
         Create and return an new schema object using the
         specified I{root} and I{url}.
@@ -356,14 +390,16 @@ class Schema:
         @type root: L{sax.element.Element}
         @param baseurl: A base URL.
         @type baseurl: str
+        @param options: An options dictionary.
+        @type options: L{options.Options}
         @return: The newly created schema object.
         @rtype: L{Schema}
         @note: This is only used by Import children.
         """
-        return Schema(root, baseurl, self.options)
+        return Schema(root, baseurl, options)
 
     def str(self, indent=0):
-        tab = '%*s'%(indent*3, '')
+        tab = '%*s' % (indent * 3, '')
         result = []
         result.append('%s%s' % (tab, self.id))
         result.append('%s(raw)' % tab)
@@ -373,16 +409,13 @@ class Schema:
             result.append(c.str(indent+1))
         result.append('')
         return '\n'.join(result)
-        
+
     def __repr__(self):
         myrep = '<%s tns="%s"/>' % (self.id, self.tns[1])
         return myrep.encode('utf-8')
-    
+
     def __str__(self):
-        return unicode(self).encode('utf-8')
-    
-    def __unicode__(self):
         return self.str()
 
-
-
+    def __unicode__(self):
+        return self.str()

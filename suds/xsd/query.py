@@ -1,6 +1,6 @@
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the (LGPL) GNU Lesser General Public License as
-# published by the Free Software Foundation; either version 3 of the 
+# published by the Free Software Foundation; either version 3 of the
 # License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
@@ -19,8 +19,7 @@ The I{query} module defines a class for performing schema queries.
 """
 
 from logging import getLogger
-from suds import *
-from suds.sudsobject import *
+from suds import Object, Repr, objid, tostr
 from suds.xsd import qualify, isqref
 from suds.xsd.sxbuiltin import Factory
 
@@ -31,8 +30,8 @@ class Query(Object):
     """
     Schema query base class.
     """
-    
-    def __init__(self, ref=None, type=None, element=None):
+
+    def __init__(self, ref=None):
         """
         @param ref: The schema reference being queried.
         @type ref: qref
@@ -43,8 +42,19 @@ class Query(Object):
         self.history = []
         self.resolved = False
         if not isqref(self.ref):
-            raise Exception('%s, must be qref' % self.ref)
-        
+            raise Exception('%s, must be qref' % tostr(self.ref))
+
+    def execute(self, schema):
+        """
+        Execute this query using the specified schema.
+        @param schema: The schema associated with the query.  The schema
+            is used by the query to search for items.
+        @type schema: L{schema.Schema}
+        @return: The item matching the search criteria.
+        @rtype: L{sxbase.SchemaObject}
+        """
+        raise Exception('not-implemented by subclass')
+
     def filter(self, result):
         """
         Filter the specified result based on query criteria.
@@ -55,11 +65,11 @@ class Query(Object):
         """
         if result is None:
             return True
-        reject = ( result in self.history )
+        reject = result in self.history
         if reject:
             log.debug('result %s, rejected by\n%s', Repr(result), self)
         return reject
-    
+
     def result(self, result):
         """
         Query result post processing.
@@ -82,23 +92,8 @@ class BlindQuery(Query):
     the specified schema.  It may be used to find Elements and Types but
     will match on an Element first.  This query will also find builtins.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         if schema.builtin(self.ref):
             name = self.ref[0]
             b = Factory.create(schema, name)
@@ -123,23 +118,8 @@ class TypeQuery(Query):
     Schema query class that searches for Type references in
     the specified schema.  Matches on root types only.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         if schema.builtin(self.ref):
             name = self.ref[0]
             b = Factory.create(schema, name)
@@ -150,28 +130,14 @@ class TypeQuery(Query):
             result = None
         return self.result(result)
 
+
 class GroupQuery(Query):
     """
     Schema query class that searches for Group references in
     the specified schema.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         result = schema.groups.get(self.ref)
         if self.filter(result):
             result = None
@@ -180,32 +146,17 @@ class GroupQuery(Query):
 
 class AttrQuery(Query):
     """
-    Schema query class that searches for Attribute references in
-    the specified schema.  Matches on root Attribute by qname first, then searches
-    deep into the document.
+    Schema query class that searches for Attribute references in the specified
+    schema.  Matches on root Attribute by qname first, then searches deep into
+    the document.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         result = schema.attributes.get(self.ref)
         if self.filter(result):
             result = self.__deepsearch(schema)
         return self.result(result)
-    
+
     def __deepsearch(self, schema):
         from suds.xsd.sxbasic import Attribute
         result = None
@@ -223,23 +174,8 @@ class AttrGroupQuery(Query):
     Schema query class that searches for attributeGroup references in
     the specified schema.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         result = schema.agrps.get(self.ref)
         if self.filter(result):
             result = None
@@ -248,32 +184,17 @@ class AttrGroupQuery(Query):
 
 class ElementQuery(Query):
     """
-    Schema query class that searches for Element references in
-    the specified schema.  Matches on root Elements by qname first, then searches
-    deep into the document.
+    Schema query class that searches for Element references in the specified
+    schema.  Matches on root Elements by qname first, then searches deep into
+    the document.
     """
-    
-    def __init__(self, ref):
-        """
-        @param ref: The schema reference being queried.
-        @type ref: qref
-        """
-        Query.__init__(self, ref)
-        
+
     def execute(self, schema):
-        """
-        Execute this query using the specified schema.
-        @param schema: The schema associated with the query.  The schema
-            is used by the query to search for items.
-        @type schema: L{schema.Schema}
-        @return: The item matching the search criteria.
-        @rtype: L{sxbase.SchemaObject}
-        """
         result = schema.elements.get(self.ref)
         if self.filter(result):
             result = self.__deepsearch(schema)
         return self.result(result)
-    
+
     def __deepsearch(self, schema):
         from suds.xsd.sxbasic import Element
         result = None
